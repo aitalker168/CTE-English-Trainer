@@ -1,4 +1,6 @@
 import os, requests, streamlit as st
+import io
+import speech_recognition as sr
 from pathlib import Path
 
 # ===== Token 设置 =====
@@ -11,7 +13,6 @@ def set_token(token: str):
 
 if GITHUB_TOKEN:
     set_token(GITHUB_TOKEN)
-# 如果没有 token，后续会让用户手动输入
 
 # ===== API 调用 =====
 API_URL = "https://models.inference.ai.azure.com/chat/completions"
@@ -37,7 +38,20 @@ def call_ai(system: str, user: str, temp: float = 0.5, max_tokens=2000, timeout=
     except Exception as e:
         return f"[网络错误] {e}"
 
-# ===== 系统提示词（和 CTE_Trainer.py 完全一样） =====
+# ===== 语音识别函数（从字节流识别） =====
+def recognize_audio_bytes(audio_bytes):
+    recognizer = sr.Recognizer()
+    try:
+        with sr.AudioFile(io.BytesIO(audio_bytes)) as source:
+            audio = recognizer.record(source)
+        text = recognizer.recognize_google(audio, language="en-US")
+        return text
+    except sr.UnknownValueError:
+        return None  # 未识别出语音
+    except Exception as e:
+        return f"[识别错误] {e}"
+
+# ===== 系统提示词（和你原来完全一致） =====
 CORRECTION_SYSTEM = (
     "你是一个英文听写助手。用户通过语音输入了一段英文，可能包含因为发音不标准导致的"
     "拼写错误或用词不当。请纠正这些错误，输出语法正确、拼写正确的英文句子。"
@@ -99,9 +113,9 @@ SUMMARY_SYSTEM = (
 st.set_page_config(page_title="🧠 CTE 英语句子训练器", page_icon="🧠", layout="wide")
 
 st.title("🧠 CTE 英语句子训练器")
-st.markdown("**步骤：** 输入中文意图 → 输入英文（语音识别后） → AI 修正 → 润色与词汇 → 练习题 + 总结")
+st.markdown("**步骤：** 输入中文意图 → 录音并识别英文 → AI 修正 → 润色与词汇 → 练习题 + 总结")
 
-# Token 输入（如果环境变量或 secrets 没有）
+# Token 输入
 if not HEADERS:
     token_input = st.text_input("请输入 GitHub Token（以 github_pat_ 开头）", type="password")
     if token_input:
@@ -109,18 +123,47 @@ if not HEADERS:
         st.success("Token 已设置！")
     else:
         st.warning("请在上方输入 Token 后才能使用。")
-        st.stop()  # 没有 Token 就不继续
+        st.stop()
 
-# 主流程
+# 初始化 session_state
+if "voice_text" not in st.session_state:
+    st.session_state.voice_text = ""
+if "audio_processed" not in st.session_state:
+    st.session_state.audio_processed = False
+
 with st.form("main_form"):
     col1, col2 = st.columns(2)
     with col1:
         chinese = st.text_area("第一步：输入中文意思（可模糊）", height=150,
                                placeholder="例如：我想表达我昨天因为下雨没能去公园散步")
     with col2:
-        voice_input = st.text_area("第二步：输入你通过语音识别得到的英文", height=150,
-                                   placeholder="例如：I yesterday because rain no go park walk")
-    
+        st.markdown("**第二步：录制英语语音**")
+        # 录音组件
+        audio_bytes = st.audio_input("🎤 点击开始录音（手机长按图标即可说话）")
+        if audio_bytes is not None:
+            # 如果有新录音且尚未处理
+            if not st.session_state.audio_processed:
+                with st.spinner("正在识别语音..."):
+                    result = recognize_audio_bytes(audio_bytes.getvalue())
+                if result is None:
+                    st.warning("未识别到语音，请重录或手动输入")
+                    st.session_state.voice_text = ""
+                elif result.startswith("[识别错误]"):
+                    st.error(result)
+                    st.session_state.voice_text = ""
+                else:
+                    st.session_state.voice_text = result
+                    st.success(f"识别结果：{result}")
+                st.session_state.audio_processed = True
+                st.rerun()  # 刷新以显示文本框内容
+        else:
+            st.session_state.audio_processed = False
+
+        # 文本框：显示识别结果，可手动修改
+        voice_input = st.text_area("或手动输入/修改英文", value=st.session_state.voice_text,
+                                   height=100, placeholder="识别结果将自动填入")
+        st.caption("* 录制后自动识别填入，你也可以直接打字。")
+
     col_a, col_b = st.columns(2)
     with col_a:
         submitted = st.form_submit_button("🚀 开始处理", use_container_width=True)
@@ -128,20 +171,20 @@ with st.form("main_form"):
         restarted = st.form_submit_button("🔄 重置", use_container_width=True)
 
 if submitted:
-    if not chinese or not voice_input:
+    if not chinese or not voice_input.strip():
         st.error("请同时填写中文意图和英文文本！")
     else:
         # Step2: 修正
         with st.spinner("正在 AI 修正语音错误..."):
-            corrected = call_ai(CORRECTION_SYSTEM, voice_input)
+            corrected = call_ai(CORRECTION_SYSTEM, voice_input.strip())
         st.subheader("修正后的英文")
         corrected_fixed = st.text_area("你可以手动微调（直接修改）", corrected, height=80)
-        
+
         if corrected_fixed:
             with st.spinner("正在 AI 润色成高水平口语..."):
                 user_msg = f"中文意图：{chinese}\n修正后的英文：{corrected_fixed}"
                 result = call_ai(POLISH_SYSTEM, user_msg, temp=0.7, max_tokens=2000)
-            
+
             # 解析
             polished, explanation, vocab = "", "", ""
             if "===EXPLANATION===" in result:
@@ -158,17 +201,17 @@ if submitted:
                 lines = result.split('\n', 1)
                 polished = lines[0].strip()
                 explanation = lines[1].strip() if len(lines) > 1 else ""
-            
+
             st.success("润色完成！")
             st.subheader("🎯 高水平口语润色结果")
             st.info(polished)
-            
+
             with st.expander("📖 详细解释（含句子结构分析）", expanded=False):
                 st.markdown(explanation)
             if vocab:
                 with st.expander("📚 词汇表（中文翻译 + 例句）", expanded=False):
                     st.text(vocab)
-            
+
             # 练习题按钮
             if st.button("📝 生成 30 道练习题", type="primary"):
                 with st.spinner("AI 正在生成练习题（约30秒）..."):
@@ -180,17 +223,16 @@ if submitted:
                 if show_answer:
                     st.text(exercise_full)
                 else:
-                    # 隐藏正确答案行
                     lines = exercise_full.split('\n')
                     show_lines = [l for l in lines if not l.strip().startswith("正确答案:")]
                     st.text('\n'.join(show_lines).strip())
-                
+
                 # 总结按钮
                 if st.button("📋 生成学习总结报告"):
                     with st.spinner("正在生成总结..."):
                         summary_input = (
                             f"【中文意图】{chinese}\n"
-                            f"【原始语音识别文本】{voice_input}\n"
+                            f"【原始语音识别文本】{voice_input.strip()}\n"
                             f"【AI修正后的英文】{corrected_fixed}\n"
                             f"【高水平口语润色结果】{polished}\n"
                             f"【词汇与结构解释】{explanation}\n"
@@ -202,3 +244,10 @@ if submitted:
                     st.download_button("💾 下载报告（TXT）", summary, file_name="CTE_summary.txt")
         else:
             st.warning("修正后的英文不能为空。")
+
+# 重置按钮处理
+if restarted:
+    for key in ["voice_text", "audio_processed"]:
+        if key in st.session_state:
+            del st.session_state[key]
+    st.rerun()
