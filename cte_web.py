@@ -95,8 +95,12 @@ SUMMARY_SYSTEM = (
     "请将以上所有信息整合成一份阅读体验良好的总结报告，直接输出，不要额外说明。"
 )
 
-# ===== 语音组件（超级醒目大按钮 + 自动提交） =====
+# ===== 语音组件（大按钮 + 返回值） =====
 def voice_component():
+    """
+    返回识别的文本，若无识别则返回 None。
+    通过组件返回值机制传递，不依赖 iframe 访问父页面 DOM。
+    """
     html = """
     <div style="margin-bottom:10px;">
         <button id="voiceBtn" onclick="toggleVoice()" style="
@@ -115,21 +119,17 @@ def voice_component():
     var timerInterval = null;
     var seconds = 0;
 
-    // 直接在当前页面（iframe自身）寻找textarea（因为Streamlit的components.html默认沙箱不允许访问父页面）
-    // 但文本区实际上在父页面，所以我们无法直接获取。解决方法：通过Streamlit的key标识，使用window.parent访问（但仍受沙箱限制）
-    // 替代方案：识别成功后，自动点击父页面中的"提交语音结果"按钮。
-    // 提交按钮的文本包含"提交语音结果"，我们通过遍历所有按钮找到它。
-    function autoSubmit() {
+    // 将识别结果传给 Python（Streamlit 组件返回值）
+    function setValue(val) {
+        // 尝试各种方式传递
         try {
-            var btns = window.parent.document.querySelectorAll('button');
-            for (var i = 0; i < btns.length; i++) {
-                if (btns[i].innerText && btns[i].innerText.trim() === '✔ 提交语音结果') {
-                    btns[i].click();
-                    break;
-                }
+            if (window.Streamlit) {
+                window.Streamlit.setComponentValue(val);
+            } else if (window.parent && window.parent.Streamlit) {
+                window.parent.Streamlit.setComponentValue(val);
             }
         } catch(e) {
-            // 如果无法访问父页面，则手动尝试通过iframe内部窗口
+            console.error('setComponentValue 失败:', e);
         }
     }
 
@@ -161,26 +161,9 @@ def voice_component():
 
         rec.onresult = function(event) {
             var transcript = event.results[0][0].transcript;
-            status.innerText = '✅ 识别成功';
-
-            // 尝试填充父页面的文本框（如果沙箱允许）
-            try {
-                var parentTextareas = window.parent.document.querySelectorAll('textarea');
-                if (parentTextareas.length > 0) {
-                    var ta = parentTextareas[parentTextareas.length - 1];
-                    ta.value = transcript;
-                    // 触发多种事件以通知Streamlit
-                    ['input', 'change', 'blur'].forEach(evt => {
-                        ta.dispatchEvent(new Event(evt, { bubbles: true }));
-                    });
-                }
-            } catch(e) {
-                // 如果不能访问父页面，则通过自动点击提交按钮来触发Python端读取
-            }
-
-            // 无论如何，自动点击提交按钮（延迟一下让文本框更新）
-            setTimeout(autoSubmit, 300);
-
+            status.innerText = '✅ 识别成功：' + transcript;
+            // 通过组件返回值传递
+            setValue(transcript);
             clearInterval(timerInterval);
             seconds = 0;
             timerSpan.innerText = '00:00';
@@ -191,6 +174,8 @@ def voice_component():
 
         rec.onerror = function(event) {
             status.innerText = '❌ 错误: ' + event.error;
+            // 传递空字符串表示失败
+            setValue('');
             clearInterval(timerInterval);
             seconds = 0;
             timerSpan.innerText = '00:00';
@@ -208,6 +193,7 @@ def voice_component():
                 btn.style.backgroundColor = '#4CAF50';
                 isRecording = false;
                 status.innerText = '录音已结束（未识别到内容）';
+                setValue('');
             }
         };
 
@@ -227,7 +213,9 @@ def voice_component():
     }
     </script>
     """
-    components.html(html, height=120)
+    # 使用 key 接收返回值
+    result = components.html(html, height=120, key="voice_recog_result")
+    return result  # 返回识别文本（如果有）
 
 # ===== 朗读按钮组件 =====
 def tts_button(text, label="🔊 朗读"):
@@ -275,6 +263,8 @@ if 'step' not in st.session_state:
     st.session_state.vocab = ""
     st.session_state.exercise_full = ""
     st.session_state.exercise_questions = ""
+    # 用于追踪是否已经处理过语音返回值
+    st.session_state.last_voice_value = ""
 
 # ===== 步骤 1：输入中文 =====
 if st.session_state.step == 1:
@@ -290,19 +280,27 @@ if st.session_state.step == 1:
         else:
             st.error("请输入中文意图")
 
-# ===== 步骤 2：语音输入（自动提交） =====
+# ===== 步骤 2：语音输入（使用返回值机制） =====
 elif st.session_state.step == 2:
     st.subheader("第二步：录制英语语音")
-    st.markdown("点击录音按钮，识别成功后**自动提交**或手动点击下方按钮。")
-
-    # 先显示文本框（即使JS无法填充，也不影响用户手动输入）
-    voice_text = st.text_area("英文内容（识别结果将自动填入）", height=120,
+    st.markdown("点击下方大按钮录音，识别成功后结果将自动填充并可以手动修改。")
+    
+    # 显示语音组件并获取返回值
+    voice_result = voice_component()
+    
+    # 如果返回值不为空且与上次处理的值不同，则自动填入并提示
+    if voice_result and voice_result != st.session_state.last_voice_value:
+        st.session_state.voice_text = voice_result
+        st.session_state.last_voice_value = voice_result
+        st.success(f"识别成功：{voice_result}")
+        st.rerun()  # 刷新界面，使文本框显示新值
+    
+    # 显示文本框（用户可手动修改）
+    voice_text = st.text_area("英文内容（可手动修改或输入）", height=120,
                                value=st.session_state.voice_text,
                                key="voice_input",
-                               placeholder="录音识别结果将自动填入，你也可以直接打字")
-    voice_component()  # 录音按钮（内含自动提交逻辑）
-
-    # 这个按钮本身留着备用，但自动提交会触发相同的逻辑
+                               placeholder="识别结果将自动填入，你也可以直接打字")
+    
     col1, col2 = st.columns(2)
     with col1:
         if st.button("✔ 提交语音结果", type="primary", use_container_width=True):
