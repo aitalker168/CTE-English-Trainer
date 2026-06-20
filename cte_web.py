@@ -95,7 +95,7 @@ SUMMARY_SYSTEM = (
     "请将以上所有信息整合成一份阅读体验良好的总结报告，直接输出，不要额外说明。"
 )
 
-# ===== 语音识别组件（带返回值） =====
+# ===== 语音识别组件（大按钮 + 结果显示 + 复制按钮） =====
 def voice_component():
     html = """
     <style>
@@ -122,16 +122,6 @@ def voice_component():
     </div>
     <script>
     var rec = null, isRecording = false, timerInterval = null, seconds = 0, lastTranscript = '';
-
-    function setStreamlitValue(val) {
-        try {
-            if (window.parent && window.parent.Streamlit) {
-                window.parent.Streamlit.setComponentValue(val);
-            }
-        } catch(e) {
-            console.error('setStreamlitValue error:', e);
-        }
-    }
 
     function toggleVoice() {
         var btn = document.getElementById('voiceBtn');
@@ -167,9 +157,6 @@ def voice_component():
             btn.innerText = '🎤 开始录音';
             btn.classList.remove('recording');
             isRecording = false;
-
-            // ★ 自动通过 Streamlit 返回值机制传递文本
-            setStreamlitValue(lastTranscript);
         };
         rec.onerror = function(event) {
             status.innerText = '❌ 错误: ' + event.error;
@@ -199,40 +186,56 @@ def voice_component():
         }, 1000);
     }
 
+    // 填充到父页面文本框（通过 placeholder 精确定位）
     function fillToTextarea() {
         if (!lastTranscript) return;
-        // 同时填充父页面文本框和传递返回值
         try {
             var parentDoc = window.parent.document;
-            var textareas = parentDoc.querySelectorAll('textarea');
-            if (textareas.length > 0) {
-                var ta = textareas[textareas.length - 1];
-                var setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
-                setter.call(ta, lastTranscript);
-                ta.dispatchEvent(new Event('input', { bubbles:true }));
-                ta.dispatchEvent(new Event('change', { bubbles:true }));
+            // 先尝试通过 placeholder 查找英文输入框
+            var ta = parentDoc.querySelector('textarea[placeholder*="识别结果会自动填入"]');
+            if (!ta) {
+                // 降级：取最后一个 textarea
+                var tas = parentDoc.querySelectorAll('textarea');
+                if (tas.length > 0) ta = tas[tas.length - 1];
             }
-        } catch(e) {}
-        setStreamlitValue(lastTranscript);  // 确保 Streamlit 侧收到更新
-        var btn = document.getElementById('fillBtn');
-        btn.innerText = '✅ 已填入文本框';
-        setTimeout(function(){ btn.innerText = '📋 复制文字进入下面的英文文字框'; }, 2000);
+            if (ta) {
+                // 使用父页面的 HTMLTextAreaElement.prototype.setter
+                var setter = Object.getOwnPropertyDescriptor(parentDoc.defaultView.HTMLTextAreaElement.prototype, 'value').set;
+                setter.call(ta, lastTranscript);
+                // 触发多事件确保 Streamlit 捕获
+                ['input', 'change', 'blur', 'keyup'].forEach(evtName => {
+                    ta.dispatchEvent(new Event(evtName, { bubbles: true }));
+                });
+                var fillBtn = document.getElementById('fillBtn');
+                fillBtn.innerText = '✅ 已填入文本框';
+                setTimeout(function(){ fillBtn.innerText = '📋 复制文字进入下面的英文文字框'; }, 2000);
+                return;
+            }
+        } catch(e) {
+            console.error('fillToTextarea error:', e);
+        }
+        // 降级方案：复制到剪贴板并提示
+        navigator.clipboard.writeText(lastTranscript).then(function() {
+            alert('未能自动填入，已复制到剪贴板，请手动粘贴。');
+        }).catch(function() {
+            prompt('请手动复制以下内容后关闭：', lastTranscript);
+        });
     }
 
     function copyResult() {
         if (!lastTranscript) return;
         navigator.clipboard.writeText(lastTranscript).then(function() {
-            var btn = document.getElementById('copyBtn');
-            btn.innerText = '✅ 已复制';
-            setTimeout(function(){ btn.innerText = '📋 复制到剪贴板'; }, 2000);
+            var copyBtn = document.getElementById('copyBtn');
+            copyBtn.innerText = '✅ 已复制';
+            setTimeout(function(){ copyBtn.innerText = '📋 复制到剪贴板'; }, 2000);
         }).catch(function() {
             prompt('请手动复制以下内容后关闭：', lastTranscript);
         });
     }
     </script>
     """
-    # 调用组件并返回识别文本（将在 Python 中处理）
-    return components.html(html, height=260)
+    # 不捕获返回值，完全依靠 DOM 操作
+    components.html(html, height=260)
 
 # ===== 朗读按钮（通用） =====
 def tts_component(text, lang='zh-CN', label='🔊 朗读', key_suffix=''):
@@ -278,7 +281,6 @@ if 'step' not in st.session_state:
     st.session_state.vocab = ''
     st.session_state.exercise_full = ''
     st.session_state.exercise_questions = ''
-    st.session_state.last_voice_value = ''  # 防止重复更新
 
 # ===== 步骤 1 =====
 if st.session_state.step == 1:
@@ -306,18 +308,12 @@ elif st.session_state.step == 2:
         tts_component(st.session_state.chinese, lang='zh-CN', label='🔊 朗读中文', key_suffix='chinese')
 
     st.markdown('---')
-    st.markdown('点击下方大按钮录音，识别结果会自动填入文本框，或手动点击「复制文字进入下面的英文文字框」按钮。')
+    st.markdown('点击下方大按钮录音，识别后点击「复制文字进入下面的英文文字框」按钮，文字会自动填入下方的文本框。')
 
-    # 获取语音返回值（自动传递）
-    voice_result = voice_component()
-
-    # 如果返回值有效且为新值，则更新 session_state 并重新渲染
-    if voice_result and voice_result != st.session_state.last_voice_value:
-        st.session_state.last_voice_value = voice_result
-        st.session_state.voice_input = voice_result
-        st.rerun()
+    voice_component()
 
     st.markdown('---')
+    # ★ 关键：使用稳定的 placeholder 供 JS 定位
     voice_text = st.text_area('英文内容（识别结果将自动填入）', height=120,
                                key='voice_input',
                                placeholder='识别结果会自动填入，你也可以直接打字')
