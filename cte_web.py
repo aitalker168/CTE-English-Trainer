@@ -95,7 +95,7 @@ SUMMARY_SYSTEM = (
     "请将以上所有信息整合成一份阅读体验良好的总结报告，直接输出，不要额外说明。"
 )
 
-# ===== 语音识别组件 =====
+# ===== 语音识别组件（大按钮 + 结果显示 + 复制按钮） =====
 def voice_component():
     html = """
     <style>
@@ -186,46 +186,35 @@ def voice_component():
         }, 1000);
     }
 
-    // 填充到父页面的文本框并自动提交
+    // 填充到父页面文本框（通过 placeholder 精确定位）
     function fillToTextarea() {
         if (!lastTranscript) return;
         try {
             var parentDoc = window.parent.document;
-            // 通过 placeholder 定位英文输入框
-            var ta = parentDoc.querySelector('textarea[placeholder*="识别结果"]');
+            // 先尝试通过 placeholder 查找英文输入框
+            var ta = parentDoc.querySelector('textarea[placeholder*="识别结果会自动填入"]');
             if (!ta) {
-                var allTextareas = parentDoc.querySelectorAll('textarea');
-                if (allTextareas.length > 0) ta = allTextareas[allTextareas.length - 1];
+                // 降级：取最后一个 textarea
+                var tas = parentDoc.querySelectorAll('textarea');
+                if (tas.length > 0) ta = tas[tas.length - 1];
             }
             if (ta) {
-                // 使用父页面原型设置值（兼容沙箱）
+                // 使用父页面的 HTMLTextAreaElement.prototype.setter
                 var setter = Object.getOwnPropertyDescriptor(parentDoc.defaultView.HTMLTextAreaElement.prototype, 'value').set;
                 setter.call(ta, lastTranscript);
-                // 触发多个事件确保 Streamlit 捕获
-                ['input', 'change', 'blur'].forEach(evt => {
-                    ta.dispatchEvent(new Event(evt, { bubbles: true }));
+                // 触发多事件确保 Streamlit 捕获
+                ['input', 'change', 'blur', 'keyup'].forEach(evtName => {
+                    ta.dispatchEvent(new Event(evtName, { bubbles: true }));
                 });
-                
-                // 更新按钮文字
                 var fillBtn = document.getElementById('fillBtn');
-                fillBtn.innerText = '✅ 已填入';
+                fillBtn.innerText = '✅ 已填入文本框';
                 setTimeout(function(){ fillBtn.innerText = '📋 复制文字进入下面的英文文字框'; }, 2000);
-
-                // 延迟后自动点击“提交语音结果”按钮
-                setTimeout(function() {
-                    var allBtns = parentDoc.querySelectorAll('button');
-                    for (var i = 0; i < allBtns.length; i++) {
-                        var btnText = allBtns[i].innerText ? allBtns[i].innerText.trim() : '';
-                        if (btnText.indexOf('提交语音结果') !== -1) {
-                            allBtns[i].click();
-                            break;
-                        }
-                    }
-                }, 800);
                 return;
             }
-        } catch(e) {}
-        // 降级：复制到剪贴板
+        } catch(e) {
+            console.error('fillToTextarea error:', e);
+        }
+        // 降级方案：复制到剪贴板并提示
         navigator.clipboard.writeText(lastTranscript).then(function() {
             alert('未能自动填入，已复制到剪贴板，请手动粘贴。');
         }).catch(function() {
@@ -245,12 +234,13 @@ def voice_component():
     }
     </script>
     """
+    # 不捕获返回值，完全依靠 DOM 操作
     components.html(html, height=260)
 
-# ===== 朗读按钮 =====
+# ===== 朗读按钮（通用） =====
 def tts_component(text, lang='zh-CN', label='🔊 朗读', key_suffix=''):
     safe = text.replace("'", "\\'").replace("\n", " ").strip()
-    unique_id = 'tts_' + (key_suffix or str(abs(hash(text))))
+    unique_id = f"ttsBtn_{key_suffix or abs(hash(text))}"
     html = f"""
     <button id="{unique_id}" onclick="speakNow_{unique_id}()" style="padding:6px 14px; font-size:14px; border:none; border-radius:6px; background-color:#2196F3; color:white; cursor:pointer;">{label}</button>
     <script>
@@ -280,6 +270,7 @@ if not HEADERS:
         st.warning('请在上方输入 Token 后才能使用。')
         st.stop()
 
+# 初始化 session_state
 if 'step' not in st.session_state:
     st.session_state.step = 1
     st.session_state.chinese = ''
@@ -309,21 +300,41 @@ if st.session_state.step == 1:
 elif st.session_state.step == 2:
     st.subheader('第二步：录制英语语音')
 
-    col_cn, col_tts = st.columns([4, 1])
+    # 显示中文意图 + 朗读按钮
+    col_cn, col_btn = st.columns([4, 1])
     with col_cn:
         st.markdown(f'**你的中文意图：** {st.session_state.chinese}')
-    with col_tts:
+    with col_btn:
         tts_component(st.session_state.chinese, lang='zh-CN', label='🔊 朗读中文', key_suffix='chinese')
 
     st.markdown('---')
-    st.markdown('点击下方大按钮录音，再点击「复制文字进入下面的英文文字框」按钮，文字将自动填入并自动提交。')
+    st.markdown('点击下方大按钮录音，识别后点击「复制文字进入下面的英文文字框」按钮，文字会自动填入下方的文本框。')
 
     voice_component()
 
     st.markdown('---')
-    st.text_area('英文内容（识别结果将自动填入并提交）', height=120,
-                 key='voice_input',
-                 placeholder='识别结果会自动填入，你也可以直接打字')
+    # ★ 关键：使用稳定的 placeholder 供 JS 定位
+    voice_text = st.text_area('英文内容（识别结果将自动填入）', height=120,
+                               key='voice_input',
+                               placeholder='识别结果会自动填入，你也可以直接打字')
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button('✔ 提交语音结果', type='primary', use_container_width=True):
+            txt = st.session_state.voice_input.strip()
+            if txt:
+                st.session_state.voice_text = txt
+                with st.spinner('正在 AI 修正语音错误...'):
+                    corrected = call_ai(CORRECTION_SYSTEM, txt)
+                st.session_state.corrected = corrected
+                st.session_state.step = 3
+                st.rerun()
+            else:
+                st.error('语音文本不能为空')
+    with col2:
+        if st.button('⬅ 返回修改中文', use_container_width=True):
+            st.session_state.step = 1
+            st.rerun()
 
 # ===== 步骤 3 =====
 elif st.session_state.step == 3:
@@ -338,6 +349,7 @@ elif st.session_state.step == 3:
             user_msg = f'中文意图：{st.session_state.chinese}\n修正后的英文：{st.session_state.corrected}'
             with st.spinner('正在 AI 润色成自然口语...'):
                 result = call_ai(POLISH_SYSTEM, user_msg, temp=0.7, max_tokens=2000)
+            # 解析结果
             polished, explanation, vocab = '', '', ''
             if '===EXPLANATION===' in result:
                 parts = result.split('===EXPLANATION===', 1)
@@ -353,6 +365,7 @@ elif st.session_state.step == 3:
                 lines = result.split('\n', 1)
                 polished = lines[0].strip()
                 explanation = lines[1].strip() if len(lines) > 1 else ''
+
             st.session_state.polished = polished
             st.session_state.explanation = explanation
             st.session_state.vocab = vocab
