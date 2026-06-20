@@ -211,7 +211,7 @@ def voice_component():
     components.html(html, height=200)
 
 # ===== 朗读按钮 =====
-def tts_button(text, label="🔊 朗读"):
+def tts_button(text, label='🔊 朗读'):
     safe = text.replace("'", "\\'").replace("\n", " ").strip()
     html = f"""
     <button onclick="speakNow()" style="padding:8px 20px; font-size:16px; border:none; border-radius:6px; background-color:#2196F3; color:white; cursor:pointer;">{label}</button>
@@ -222,75 +222,188 @@ def tts_button(text, label="🔊 朗读"):
     components.html(html, height=50)
 
 # ===== Streamlit 界面 =====
-st.set_page_config(page_title="🧠 CTE 英语句子训练器", page_icon="🧠", layout="wide")
-st.title("🧠 CTE 英语句子训练器")
+st.set_page_config(page_title='🧠 CTE 英语句子训练器', page_icon='🧠', layout='wide')
+st.title('🧠 CTE 英语句子训练器')
 
 if not HEADERS:
-    token_input = st.text_input("请输入 GitHub Token（以 github_pat_ 开头）", type="password")
+    token_input = st.text_input('请输入 GitHub Token（以 github_pat_ 开头）', type='password')
     if token_input:
         set_token(token_input)
-        st.success("Token 已设置！")
+        st.success('Token 已设置！')
     else:
-        st.warning("请在上方输入 Token 后才能使用。")
+        st.warning('请在上方输入 Token 后才能使用。')
         st.stop()
 
 # 初始化 session_state
 if 'step' not in st.session_state:
     st.session_state.step = 1
-    st.session_state.chinese = ""
-    st.session_state.voice_text = ""
-    st.session_state.corrected = ""
-    st.session_state.polished = ""
-    st.session_state.explanation = ""
-    st.session_state.vocab = ""
-    st.session_state.exercise_full = ""
-    st.session_state.exercise_questions = ""
+    st.session_state.chinese = ''
+    st.session_state.voice_text = ''
+    st.session_state.corrected = ''
+    st.session_state.polished = ''
+    st.session_state.explanation = ''
+    st.session_state.vocab = ''
+    st.session_state.exercise_full = ''
+    st.session_state.exercise_questions = ''
 
 # ===== 步骤 1 =====
 if st.session_state.step == 1:
-    st.subheader("第一步：输入中文意图")
-    chinese = st.text_area("请输入你想要表达的中文意思（可模糊）", height=120,
+    st.subheader('第一步：输入中文意图')
+    chinese = st.text_area('请输入你想要表达的中文意思（可模糊）', height=120,
                            value=st.session_state.chinese,
-                           placeholder="例如：我想表达我昨天因为下雨没能去公园散步")
-    if st.button("确认 →", type="primary", use_container_width=True):
+                           placeholder='例如：我想表达我昨天因为下雨没能去公园散步')
+    if st.button('确认 →', type='primary', use_container_width=True):
         if chinese.strip():
             st.session_state.chinese = chinese.strip()
             st.session_state.step = 2
             st.rerun()
         else:
-            st.error("请输入中文意图")
+            st.error('请输入中文意图')
 
 # ===== 步骤 2 =====
 elif st.session_state.step == 2:
-    st.subheader("第二步：录制英语语音")
-    st.markdown("点击下方大按钮录音，识别结果会显示在下方，点击"📋 复制结果"按钮后粘贴到文本框中。")
+    st.subheader('第二步：录制英语语音')
+    st.markdown(
+        '点击下方大按钮录音，识别结果会显示在下方，点击「📋 复制结果」按钮后粘贴到文本框中。'
+    )
 
-    voice_component()  # 录音 + 显示结果 + 复制按钮
+    voice_component()
 
-    st.markdown("---")
-    # ★★★ 关键修改：移除 value 参数，只保留 key，让用户输入自动存入 session_state ★★★
-    voice_text = st.text_area("英文内容（请粘贴或手动输入）", height=120,
-                               key="voice_input",
-                               placeholder="将识别结果粘贴到这里，或直接打字")
+    st.markdown('---')
+    # 关键修改：去掉 value 参数，只保留 key
+    voice_text = st.text_area('英文内容（请粘贴或手动输入）', height=120,
+                               key='voice_input',
+                               placeholder='将识别结果粘贴到这里，或直接打字')
 
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("✔ 提交语音结果", type="primary", use_container_width=True):
+        if st.button('✔ 提交语音结果', type='primary', use_container_width=True):
             txt = st.session_state.voice_input.strip()
             if txt:
                 st.session_state.voice_text = txt
-                with st.spinner("正在 AI 修正语音错误..."):
+                with st.spinner('正在 AI 修正语音错误...'):
                     corrected = call_ai(CORRECTION_SYSTEM, txt)
                 st.session_state.corrected = corrected
                 st.session_state.step = 3
                 st.rerun()
             else:
-                st.error("语音文本不能为空")
+                st.error('语音文本不能为空')
     with col2:
-        if st.button("⬅ 返回修改中文", use_container_width=True):
+        if st.button('⬅ 返回修改中文', use_container_width=True):
             st.session_state.step = 1
             st.rerun()
 
-# ===== 步骤 3、4、5 与之前相同，为节省篇幅省略，使用时请从之前完整代码中复制 =====
-# 以下为完整步骤3-5（实际部署时应包含全部代码）
-# 为保持完整性，可将之前版本的步骤3-5复制到此处
+# ===== 步骤 3 =====
+elif st.session_state.step == 3:
+    st.subheader('第三步：AI 已修正语音错误，你可以手动微调')
+    corrected_fixed = st.text_area('修正后的英文（可手动修改）', height=100,
+                                    value=st.session_state.corrected,
+                                    key='corrected_input')
+
+    if st.button('✔ 提交并润色', type='primary', use_container_width=True):
+        if corrected_fixed.strip():
+            st.session_state.corrected = corrected_fixed.strip()
+            user_msg = f'中文意图：{st.session_state.chinese}\n修正后的英文：{st.session_state.corrected}'
+            with st.spinner('正在 AI 润色成高水平口语...'):
+                result = call_ai(POLISH_SYSTEM, user_msg, temp=0.7, max_tokens=2000)
+            # 解析结果
+            polished, explanation, vocab = '', '', ''
+            if '===EXPLANATION===' in result:
+                parts = result.split('===EXPLANATION===', 1)
+                polished = parts[0].strip()
+                rest = parts[1]
+                if '===VOCABULARY===' in rest:
+                    exp_parts = rest.split('===VOCABULARY===', 1)
+                    explanation = exp_parts[0].strip()
+                    vocab = exp_parts[1].strip()
+                else:
+                    explanation = rest.strip()
+            else:
+                lines = result.split('\n', 1)
+                polished = lines[0].strip()
+                explanation = lines[1].strip() if len(lines) > 1 else ''
+
+            st.session_state.polished = polished
+            st.session_state.explanation = explanation
+            st.session_state.vocab = vocab
+            st.session_state.step = 4
+            st.rerun()
+        else:
+            st.error('修正后的英文不能为空')
+
+# ===== 步骤 4 =====
+elif st.session_state.step == 4:
+    st.subheader('🎯 高水平口语润色结果')
+    st.info(st.session_state.polished)
+    tts_button(st.session_state.polished, label='🔊 朗读润色句子')
+
+    with st.expander('📖 详细解释（含句子结构分析）', expanded=False):
+        st.markdown(st.session_state.explanation)
+    if st.session_state.vocab:
+        with st.expander('📚 词汇表（中文翻译 + 例句）', expanded=False):
+            st.text(st.session_state.vocab)
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        if st.button('🔄 重新开始', use_container_width=True):
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            st.rerun()
+    with col2:
+        if st.button('📝 生成练习题', type='primary', use_container_width=True):
+            st.session_state.step = 5
+            st.rerun()
+    with col3:
+        if st.button('⬅ 返回修正', use_container_width=True):
+            st.session_state.step = 3
+            st.rerun()
+
+# ===== 步骤 5 =====
+elif st.session_state.step == 5:
+    if not st.session_state.exercise_full:
+        with st.spinner('AI 正在生成30道练习题（约30秒）...'):
+            exercise = call_ai(EXERCISE_SYSTEM,
+                               f'请根据以下句子生成30道练习题：\n{st.session_state.polished}',
+                               temp=0.7, max_tokens=3500)
+        if exercise.startswith('[') and ('错误' in exercise or '错误' in exercise):
+            st.error(f'生成失败：{exercise}')
+            st.session_state.step = 4
+            st.rerun()
+        st.session_state.exercise_full = exercise
+        lines = exercise.split('\n')
+        q_lines = [l for l in lines if not l.strip().startswith('正确答案:')]
+        st.session_state.exercise_questions = '\n'.join(q_lines).strip()
+        st.rerun()
+    else:
+        st.subheader('📝 练习题')
+        show_answers = st.checkbox('👁 显示答案', key='show_ans')
+        if show_answers:
+            st.text(st.session_state.exercise_full)
+        else:
+            st.text(st.session_state.exercise_questions)
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            if st.button('⬅ 返回润色', use_container_width=True):
+                st.session_state.step = 4
+                st.rerun()
+        with col2:
+            if st.button('📋 生成学习总结', type='primary', use_container_width=True):
+                with st.spinner('正在生成总结...'):
+                    summary_input = (
+                        f'【中文意图】{st.session_state.chinese}\n'
+                        f'【原始语音识别文本】{st.session_state.voice_text}\n'
+                        f'【AI修正后的英文】{st.session_state.corrected}\n'
+                        f'【高水平口语润色结果】{st.session_state.polished}\n'
+                        f'【词汇与结构解释】{st.session_state.explanation}\n'
+                        f'【练习题（含答案）】{st.session_state.exercise_full}'
+                    )
+                    summary = call_ai(SUMMARY_SYSTEM, summary_input, temp=0.5, max_tokens=3000)
+                st.subheader('📄 学习总结报告')
+                st.markdown(summary)
+                st.download_button('💾 下载报告（TXT）', summary, file_name='CTE_summary.txt')
+        with col3:
+            if st.button('🔄 重新开始', use_container_width=True):
+                for key in list(st.session_state.keys()):
+                    del st.session_state[key]
+                st.rerun()
