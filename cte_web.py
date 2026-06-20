@@ -95,7 +95,7 @@ SUMMARY_SYSTEM = (
     "请将以上所有信息整合成一份阅读体验良好的总结报告，直接输出，不要额外说明。"
 )
 
-# ===== 语音组件（大按钮 + 计时 + 自动填入文本框） =====
+# ===== 语音组件（超大按钮 + 跨 iframe 填充文本框） =====
 def voice_component():
     html = """
     <div style="margin-bottom:10px;">
@@ -115,13 +115,25 @@ def voice_component():
     var timerInterval = null;
     var seconds = 0;
 
+    // 获取父页面（Streamlit 主窗口）中最后一个 textarea
+    function getTargetTextarea() {
+        try {
+            if (window.parent && window.parent.document) {
+                var tas = window.parent.document.querySelectorAll('textarea');
+                if (tas.length > 0) return tas[tas.length - 1];
+            }
+        } catch(e) {}
+        var tas = document.querySelectorAll('textarea');
+        if (tas.length > 0) return tas[tas.length - 1];
+        return null;
+    }
+
     function toggleVoice() {
         var btn = document.getElementById('voiceBtn');
         var status = document.getElementById('voiceStatus');
         var timerSpan = document.getElementById('timer');
 
         if (isRecording) {
-            // 停止录音
             if (rec) { rec.stop(); rec = null; }
             clearInterval(timerInterval);
             isRecording = false;
@@ -131,7 +143,6 @@ def voice_component():
             return;
         }
 
-        // 检测浏览器支持
         var SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         if (!SpeechRecognition) {
             status.innerText = '❌ 此浏览器不支持语音识别，请用Chrome/Edge';
@@ -146,14 +157,11 @@ def voice_component():
         rec.onresult = function(event) {
             var transcript = event.results[0][0].transcript;
             status.innerText = '✅ 识别成功';
-            // 填充到页面上最后一个 textarea
-            var textareas = document.querySelectorAll('textarea');
-            if (textareas.length > 0) {
-                var ta = textareas[textareas.length - 1];
+            var ta = getTargetTextarea();
+            if (ta) {
                 ta.value = transcript;
                 ta.dispatchEvent(new Event('input', { bubbles: true }));
             }
-            // 停止计时并恢复按钮
             clearInterval(timerInterval);
             seconds = 0;
             timerSpan.innerText = '00:00';
@@ -174,7 +182,6 @@ def voice_component():
 
         rec.onend = function() {
             if (isRecording) {
-                // 非正常结束（如超时），重置
                 clearInterval(timerInterval);
                 seconds = 0;
                 timerSpan.innerText = '00:00';
@@ -185,14 +192,11 @@ def voice_component():
             }
         };
 
-        // 启动录音
         rec.start();
         isRecording = true;
         btn.innerText = '⏹ 停止录音';
         btn.style.backgroundColor = '#f44336';
         status.innerText = '🎙️ 录音中...';
-
-        // 计时
         seconds = 0;
         timerSpan.innerText = '00:00';
         timerInterval = setInterval(function() {
@@ -204,10 +208,9 @@ def voice_component():
     }
     </script>
     """
-    components.html(html, height=120)
-    # 不捕获返回值，避免 rerun
+    components.html(html, height=120, sandbox="allow-scripts allow-same-origin")
 
-# ===== 朗读按钮组件 =====
+# ===== 朗读按钮组件（解决首次点击无声问题） =====
 def tts_button(text, label="🔊 朗读"):
     safe = text.replace("'", "\\'").replace("\n", " ").strip()
     html = f"""
@@ -271,22 +274,21 @@ if st.session_state.step == 1:
 # ===== 步骤 2：语音输入 =====
 elif st.session_state.step == 2:
     st.subheader("第二步：录制英语语音")
-    st.markdown("点击下方大按钮开始录音（手机长按图标即可说话），识别结果将自动填入下方文本框。")
-    
-    voice_component()  # 录音组件
-    
-    voice_text = st.text_area("或手动输入/修改英文", height=120,
-                              value=st.session_state.voice_text,
-                              key="voice_input",
-                              placeholder="识别结果将自动填入这里，你也可以直接打字")
-    
+    st.markdown("语音识别结果将**自动填入**下面的文本框，你可以直接修改或输入。")
+
+    # 先显示文本框，再显示录音按钮（保证点击时文本框已存在）
+    voice_text = st.text_area("英文内容（可手动输入或修改）", height=120,
+                               value=st.session_state.voice_text,
+                               key="voice_input",
+                               placeholder="识别结果或手动输入的英文将显示在此")
+    voice_component()  # 录音按钮
+
     col1, col2 = st.columns(2)
     with col1:
         if st.button("✔ 提交语音结果", type="primary", use_container_width=True):
             txt = st.session_state.voice_input.strip()
             if txt:
                 st.session_state.voice_text = txt
-                # 立即调用修正 API
                 with st.spinner("正在 AI 修正语音错误..."):
                     corrected = call_ai(CORRECTION_SYSTEM, txt)
                 st.session_state.corrected = corrected
@@ -376,7 +378,6 @@ elif st.session_state.step == 5:
             st.session_state.step = 4
             st.rerun()
         st.session_state.exercise_full = exercise
-        # 分离题目与答案（隐藏答案行）
         lines = exercise.split('\n')
         q_lines = [l for l in lines if not l.strip().startswith("正确答案:")]
         st.session_state.exercise_questions = "\n".join(q_lines).strip()
