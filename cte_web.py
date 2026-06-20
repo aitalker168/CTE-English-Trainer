@@ -95,43 +95,39 @@ SUMMARY_SYSTEM = (
     "请将以上所有信息整合成一份阅读体验良好的总结报告，直接输出，不要额外说明。"
 )
 
-# ===== 语音组件（大按钮 + 返回值） =====
+# ===== 语音组件（超大按钮 + 内部显示识别结果 + 复制功能） =====
 def voice_component():
-    """
-    返回识别的文本，若无识别则返回 None。
-    通过组件返回值机制传递，不依赖 iframe 访问父页面 DOM。
-    """
     html = """
-    <div style="margin-bottom:10px;">
-        <button id="voiceBtn" onclick="toggleVoice()" style="
+    <style>
+        #voiceBtn {
             width:100%; padding:18px 0; font-size:22px; font-weight:bold;
             background-color:#4CAF50; color:white; border:none; border-radius:10px;
-            cursor:pointer; box-shadow: 2px 2px 8px rgba(0,0,0,0.2);
-        ">🎤 开始录音</button>
+            cursor:pointer; box-shadow:2px 2px 8px rgba(0,0,0,0.2);
+        }
+        #voiceBtn.recording { background-color:#f44336; }
+        #voiceStatus { font-size:14px; color:gray; }
+        #timer { font-size:14px; font-family:monospace; }
+        #resultArea {
+            margin-top:12px; padding:12px; background:#f0f8f0; border-radius:8px;
+            font-size:18px; font-weight:bold; color:#2e7d32; display:none; word-wrap:break-word;
+        }
+        #copyBtn {
+            margin-top:8px; padding:6px 16px; font-size:14px; border:none;
+            background-color:#2196F3; color:white; border-radius:6px; cursor:pointer;
+            display:none;
+        }
+    </style>
+    <div>
+        <button id="voiceBtn" onclick="toggleVoice()">🎤 开始录音</button>
         <div style="display:flex; justify-content:space-between; margin-top:8px;">
-            <span id="voiceStatus" style="font-size:14px; color:gray;">点击后说话</span>
-            <span id="timer" style="font-size:14px; font-family:monospace;">00:00</span>
+            <span id="voiceStatus">点击后说话</span>
+            <span id="timer">00:00</span>
         </div>
+        <div id="resultArea"></div>
+        <button id="copyBtn" onclick="copyResult()">📋 复制到文本框</button>
     </div>
     <script>
-    var rec = null;
-    var isRecording = false;
-    var timerInterval = null;
-    var seconds = 0;
-
-    // 将识别结果传给 Python（Streamlit 组件返回值）
-    function setValue(val) {
-        // 尝试各种方式传递
-        try {
-            if (window.Streamlit) {
-                window.Streamlit.setComponentValue(val);
-            } else if (window.parent && window.parent.Streamlit) {
-                window.parent.Streamlit.setComponentValue(val);
-            }
-        } catch(e) {
-            console.error('setComponentValue 失败:', e);
-        }
-    }
+    var rec = null, isRecording = false, timerInterval = null, seconds = 0, lastTranscript = '';
 
     function toggleVoice() {
         var btn = document.getElementById('voiceBtn');
@@ -143,16 +139,12 @@ def voice_component():
             clearInterval(timerInterval);
             isRecording = false;
             btn.innerText = '🎤 开始录音';
-            btn.style.backgroundColor = '#4CAF50';
-            status.innerText = '已停止';
+            btn.classList.remove('recording');
             return;
         }
 
         var SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-        if (!SpeechRecognition) {
-            status.innerText = '❌ 此浏览器不支持语音识别，请用Chrome/Edge';
-            return;
-        }
+        if (!SpeechRecognition) { status.innerText = '❌ 不支持，请用Chrome/Edge'; return; }
 
         rec = new SpeechRecognition();
         rec.lang = 'en-US';
@@ -160,62 +152,72 @@ def voice_component():
         rec.continuous = false;
 
         rec.onresult = function(event) {
-            var transcript = event.results[0][0].transcript;
-            status.innerText = '✅ 识别成功：' + transcript;
-            // 通过组件返回值传递
-            setValue(transcript);
+            lastTranscript = event.results[0][0].transcript;
+            status.innerText = '✅ 识别成功';
+            var resultArea = document.getElementById('resultArea');
+            resultArea.innerText = '🔊 ' + lastTranscript;
+            resultArea.style.display = 'block';
+            document.getElementById('copyBtn').style.display = 'inline-block';
             clearInterval(timerInterval);
-            seconds = 0;
-            timerSpan.innerText = '00:00';
+            seconds = 0; timerSpan.innerText = '00:00';
             btn.innerText = '🎤 开始录音';
-            btn.style.backgroundColor = '#4CAF50';
+            btn.classList.remove('recording');
             isRecording = false;
         };
-
         rec.onerror = function(event) {
             status.innerText = '❌ 错误: ' + event.error;
-            // 传递空字符串表示失败
-            setValue('');
-            clearInterval(timerInterval);
-            seconds = 0;
-            timerSpan.innerText = '00:00';
-            btn.innerText = '🎤 开始录音';
-            btn.style.backgroundColor = '#4CAF50';
-            isRecording = false;
+            stopRecording();
         };
-
         rec.onend = function() {
-            if (isRecording) {
-                clearInterval(timerInterval);
-                seconds = 0;
-                timerSpan.innerText = '00:00';
-                btn.innerText = '🎤 开始录音';
-                btn.style.backgroundColor = '#4CAF50';
-                isRecording = false;
-                status.innerText = '录音已结束（未识别到内容）';
-                setValue('');
-            }
+            if (isRecording) { stopRecording(); status.innerText = '未识别到内容'; }
         };
+        function stopRecording() {
+            clearInterval(timerInterval);
+            seconds = 0; timerSpan.innerText = '00:00';
+            btn.innerText = '🎤 开始录音';
+            btn.classList.remove('recording');
+            isRecording = false;
+        }
 
         rec.start();
         isRecording = true;
         btn.innerText = '⏹ 停止录音';
-        btn.style.backgroundColor = '#f44336';
+        btn.classList.add('recording');
         status.innerText = '🎙️ 录音中...';
-        seconds = 0;
-        timerSpan.innerText = '00:00';
+        seconds = 0; timerSpan.innerText = '00:00';
         timerInterval = setInterval(function() {
             seconds++;
-            var m = Math.floor(seconds / 60);
-            var s = seconds % 60;
-            timerSpan.innerText = (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
+            var m = Math.floor(seconds/60), s = seconds%60;
+            timerSpan.innerText = (m<10?'0':'')+m+':'+(s<10?'0':'')+s;
         }, 1000);
+    }
+
+    function copyResult() {
+        if (!lastTranscript) return;
+        // 尝试写入父页面文本框（仅当 iframe 同源时有效，失败则降级）
+        try {
+            var parentText = window.parent.document.querySelector('textarea[key="voice_input"]') ||
+                             window.parent.document.querySelectorAll('textarea');
+            if (parentText) {
+                if (parentText.length) parentText = parentText[parentText.length-1];
+                parentText.value = lastTranscript;
+                parentText.dispatchEvent(new Event('input', {bubbles:true}));
+                document.getElementById('copyBtn').innerText = '✅ 已填入文本框';
+                setTimeout(function(){ document.getElementById('copyBtn').innerText = '📋 复制到文本框'; }, 2000);
+                return;
+            }
+        } catch(e) {}
+        // 降级：复制到剪贴板
+        navigator.clipboard.writeText(lastTranscript).then(function() {
+            document.getElementById('copyBtn').innerText = '✅ 已复制到剪贴板';
+            setTimeout(function(){ document.getElementById('copyBtn').innerText = '📋 复制到文本框'; }, 2000);
+        }).catch(function() {
+            alert('请手动复制下面识别结果: ' + lastTranscript);
+        });
     }
     </script>
     """
-    # 使用 key 接收返回值
-    result = components.html(html, height=120, key="voice_recog_result")
-    return result  # 返回识别文本（如果有）
+    components.html(html, height=200)
 
 # ===== 朗读按钮组件 =====
 def tts_button(text, label="🔊 朗读"):
@@ -263,8 +265,6 @@ if 'step' not in st.session_state:
     st.session_state.vocab = ""
     st.session_state.exercise_full = ""
     st.session_state.exercise_questions = ""
-    # 用于追踪是否已经处理过语音返回值
-    st.session_state.last_voice_value = ""
 
 # ===== 步骤 1：输入中文 =====
 if st.session_state.step == 1:
@@ -280,27 +280,20 @@ if st.session_state.step == 1:
         else:
             st.error("请输入中文意图")
 
-# ===== 步骤 2：语音输入（使用返回值机制） =====
+# ===== 步骤 2：语音输入 =====
 elif st.session_state.step == 2:
     st.subheader("第二步：录制英语语音")
-    st.markdown("点击下方大按钮录音，识别成功后结果将自动填充并可以手动修改。")
-    
-    # 显示语音组件并获取返回值
-    voice_result = voice_component()
-    
-    # 如果返回值不为空且与上次处理的值不同，则自动填入并提示
-    if voice_result and voice_result != st.session_state.last_voice_value:
-        st.session_state.voice_text = voice_result
-        st.session_state.last_voice_value = voice_result
-        st.success(f"识别成功：{voice_result}")
-        st.rerun()  # 刷新界面，使文本框显示新值
-    
-    # 显示文本框（用户可手动修改）
-    voice_text = st.text_area("英文内容（可手动修改或输入）", height=120,
+    st.markdown("点击下方大按钮录音，识别结果会显示在下方，复制后填入文本框即可。")
+
+    # 语音组件（显示 + 复制）
+    voice_component()
+
+    st.markdown("---")
+    voice_text = st.text_area("英文内容（请粘贴或手动输入）", height=120,
                                value=st.session_state.voice_text,
                                key="voice_input",
-                               placeholder="识别结果将自动填入，你也可以直接打字")
-    
+                               placeholder="将识别结果粘贴到这里，或直接打字")
+
     col1, col2 = st.columns(2)
     with col1:
         if st.button("✔ 提交语音结果", type="primary", use_container_width=True):
