@@ -38,21 +38,23 @@ def call_ai(system: str, user: str, temp: float = 0.5, max_tokens=2000, timeout=
         return f"[网络错误] {e}"
 
 # ===== 系统提示词 =====
+# 注：CORRECTION_SYSTEM 不变
 CORRECTION_SYSTEM = (
     "你是一个英文听写助手。用户通过语音输入了一段英文，可能包含因为发音不标准导致的"
     "拼写错误或用词不当。请纠正这些错误，输出语法正确、拼写正确的英文句子。"
     "保留用户原本想表达的意思，不要添加额外内容。"
 )
 
+# 修改后的 POLISH_SYSTEM：降低难度要求
 POLISH_SYSTEM = (
     "你是一个英语口语教练。用户提供了一个中文意图和一段初步修正的英文。\n"
     "请按以下要求严格输出：\n\n"
-    "第一步：将修正后的英文润色为高水平、地道、自然的口语版英语（仍保持口语风格，但用词和句式更高级、更准确）。只输出润色后的句子，不要任何额外文字。\n\n"
+    "第一步：将修正后的英文润色为地道、自然的口语版英语。注意：**不要使用过于高端或生僻的词汇，保持与用户原句难度相近，适当提高但不超过日常口语常用水平**。只输出润色后的句子，不要任何额外文字。\n\n"
     "第二步：在润色句子之后，立即换行，然后输出以下分隔符：\n"
     "===EXPLANATION===\n"
     "然后换行，再按照以下三个序列号输出详细的解释：\n"
-    "序列号1: 详细说明你如何从用户输入的原始英文思考并生成这个高水平句子的过程。特别说明你增加了哪些形容词、副词、动词以及为什么增加。\n"
-    "序列号2: 列出润色后句子中所有的动词、形容词、副词，并逐个解释为什么选用这个词。\n"
+    "序列号1: 详细说明你如何从用户输入的原始英文思考并生成这个句子的过程。特别说明你增加了哪些形容词、副词、动词以及为什么增加（注意解释中用词也要简单易懂）。\n"
+    "序列号2: 列出润色后句子中所有的动词、形容词、副词，并逐个解释为什么选用这个词（用简单的中文解释）。\n"
     "序列号3: 分析润色后句子的语法架构（主句、从句、连接词、语序等），并说明为什么采用这个架构。\n\n"
     "第三步：在第二步的解释全部结束后，换行，然后输出以下分隔符：\n"
     "===VOCABULARY===\n"
@@ -95,7 +97,7 @@ SUMMARY_SYSTEM = (
     "请将以上所有信息整合成一份阅读体验良好的总结报告，直接输出，不要额外说明。"
 )
 
-# ===== 语音组件（超大按钮 + 内部显示结果 + 复制按钮） =====
+# ===== 语音识别组件 =====
 def voice_component():
     html = """
     <style>
@@ -183,7 +185,6 @@ def voice_component():
 
     function copyResult() {
         if (!lastTranscript) return;
-        // 尝试写入父页面的文本框（仅当同源时有效）
         try {
             var parentDoc = window.parent.document;
             var textareas = parentDoc.querySelectorAll('textarea');
@@ -198,7 +199,6 @@ def voice_component():
                 return;
             }
         } catch(e) {}
-        // 降级：复制到剪贴板
         navigator.clipboard.writeText(lastTranscript).then(function() {
             document.getElementById('copyBtn').innerText = '✅ 已复制';
             setTimeout(function(){ document.getElementById('copyBtn').innerText = '📋 复制结果'; }, 2000);
@@ -210,13 +210,22 @@ def voice_component():
     """
     components.html(html, height=200)
 
-# ===== 朗读按钮 =====
-def tts_button(text, label='🔊 朗读'):
+# ===== 朗读按钮（通用） =====
+def tts_component(text, lang='zh-CN', label='🔊 朗读', key_suffix=''):
     safe = text.replace("'", "\\'").replace("\n", " ").strip()
+    unique_id = f"ttsBtn_{key_suffix or abs(hash(text))}"
     html = f"""
-    <button onclick="speakNow()" style="padding:8px 20px; font-size:16px; border:none; border-radius:6px; background-color:#2196F3; color:white; cursor:pointer;">{label}</button>
+    <button id="{unique_id}" onclick="speakNow_{unique_id}()" style="padding:6px 14px; font-size:14px; border:none; border-radius:6px; background-color:#2196F3; color:white; cursor:pointer;">{label}</button>
     <script>
-    function speakNow() {{ try {{ window.speechSynthesis.cancel(); var u = new SpeechSynthesisUtterance('{safe}'); u.lang = 'zh-CN'; u.rate = 0.9; window.speechSynthesis.speak(u); }} catch(e) {{ console.error(e); }} }}
+    function speakNow_{unique_id}() {{
+        try {{
+            window.speechSynthesis.cancel();
+            var u = new SpeechSynthesisUtterance('{safe}');
+            u.lang = '{lang}';
+            u.rate = 0.9;
+            window.speechSynthesis.speak(u);
+        }} catch(e) {{ console.error(e); }}
+    }}
     </script>
     """
     components.html(html, height=50)
@@ -263,14 +272,26 @@ if st.session_state.step == 1:
 # ===== 步骤 2 =====
 elif st.session_state.step == 2:
     st.subheader('第二步：录制英语语音')
-    st.markdown(
-        '点击下方大按钮录音，识别结果会显示在下方，点击「📋 复制结果」按钮后粘贴到文本框中。'
-    )
+
+    # 修改1：显示中文意图（只读样式）
+    chinese_display = st.text_area('你的中文意图（供参考）', height=80,
+                                   value=st.session_state.chinese,
+                                   key='chinese_display',
+                                   disabled=True)
+    # 在中文意图右边加朗读按钮（放在同一行？使用列布局）
+    # 由于 text_area 占满宽度，朗读按钮只能放在下方。我们使用两个列：左边显示中文，右边显示按钮
+    col_cn, col_btn = st.columns([4, 1])
+    with col_cn:
+        st.markdown(f'**你的中文意图：** {st.session_state.chinese}')
+    with col_btn:
+        tts_component(st.session_state.chinese, lang='zh-CN', label='🔊 朗读中文', key_suffix='chinese')
+
+    st.markdown('---')
+    st.markdown('点击下方大按钮录音，识别结果会显示在下方，点击「📋 复制结果」按钮后粘贴到文本框中。')
 
     voice_component()
 
     st.markdown('---')
-    # 关键修改：去掉 value 参数，只保留 key
     voice_text = st.text_area('英文内容（请粘贴或手动输入）', height=120,
                                key='voice_input',
                                placeholder='将识别结果粘贴到这里，或直接打字')
@@ -304,7 +325,7 @@ elif st.session_state.step == 3:
         if corrected_fixed.strip():
             st.session_state.corrected = corrected_fixed.strip()
             user_msg = f'中文意图：{st.session_state.chinese}\n修正后的英文：{st.session_state.corrected}'
-            with st.spinner('正在 AI 润色成高水平口语...'):
+            with st.spinner('正在 AI 润色成自然口语...'):
                 result = call_ai(POLISH_SYSTEM, user_msg, temp=0.7, max_tokens=2000)
             # 解析结果
             polished, explanation, vocab = '', '', ''
@@ -333,9 +354,9 @@ elif st.session_state.step == 3:
 
 # ===== 步骤 4 =====
 elif st.session_state.step == 4:
-    st.subheader('🎯 高水平口语润色结果')
+    st.subheader('🎯 口语润色结果')
     st.info(st.session_state.polished)
-    tts_button(st.session_state.polished, label='🔊 朗读润色句子')
+    tts_component(st.session_state.polished, lang='en-US', label='🔊 朗读润色句子', key_suffix='polish')
 
     with st.expander('📖 详细解释（含句子结构分析）', expanded=False):
         st.markdown(st.session_state.explanation)
@@ -394,7 +415,7 @@ elif st.session_state.step == 5:
                         f'【中文意图】{st.session_state.chinese}\n'
                         f'【原始语音识别文本】{st.session_state.voice_text}\n'
                         f'【AI修正后的英文】{st.session_state.corrected}\n'
-                        f'【高水平口语润色结果】{st.session_state.polished}\n'
+                        f'【口语润色结果】{st.session_state.polished}\n'
                         f'【词汇与结构解释】{st.session_state.explanation}\n'
                         f'【练习题（含答案）】{st.session_state.exercise_full}'
                     )
