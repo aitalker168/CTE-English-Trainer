@@ -95,7 +95,7 @@ SUMMARY_SYSTEM = (
     "请将以上所有信息整合成一份阅读体验良好的总结报告，直接输出，不要额外说明。"
 )
 
-# ===== 语音组件（超大按钮 + 跨 iframe 填充文本框） =====
+# ===== 语音组件（超级醒目大按钮 + 跨iframe填充文本框） =====
 def voice_component():
     html = """
     <div style="margin-bottom:10px;">
@@ -208,9 +208,10 @@ def voice_component():
     }
     </script>
     """
-    components.html(html, height=120, sandbox="allow-scripts allow-same-origin")
+    # 关键修正：移除 sandbox 参数，采用默认沙盒策略
+    components.html(html, height=120)
 
-# ===== 朗读按钮组件（解决首次点击无声问题） =====
+# ===== 朗读按钮组件 =====
 def tts_button(text, label="🔊 朗读"):
     safe = text.replace("'", "\\'").replace("\n", " ").strip()
     html = f"""
