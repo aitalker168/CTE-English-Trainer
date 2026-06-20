@@ -38,14 +38,12 @@ def call_ai(system: str, user: str, temp: float = 0.5, max_tokens=2000, timeout=
         return f"[网络错误] {e}"
 
 # ===== 系统提示词 =====
-# 注：CORRECTION_SYSTEM 不变
 CORRECTION_SYSTEM = (
     "你是一个英文听写助手。用户通过语音输入了一段英文，可能包含因为发音不标准导致的"
     "拼写错误或用词不当。请纠正这些错误，输出语法正确、拼写正确的英文句子。"
     "保留用户原本想表达的意思，不要添加额外内容。"
 )
 
-# 修改后的 POLISH_SYSTEM：降低难度要求
 POLISH_SYSTEM = (
     "你是一个英语口语教练。用户提供了一个中文意图和一段初步修正的英文。\n"
     "请按以下要求严格输出：\n\n"
@@ -97,7 +95,7 @@ SUMMARY_SYSTEM = (
     "请将以上所有信息整合成一份阅读体验良好的总结报告，直接输出，不要额外说明。"
 )
 
-# ===== 语音识别组件 =====
+# ===== 语音识别组件（包含大按钮、计时、结果显示、复制与填入文本框按钮） =====
 def voice_component():
     html = """
     <style>
@@ -106,7 +104,9 @@ def voice_component():
         #status { font-size:14px; color:gray; }
         #timer { font-size:14px; font-family:monospace; }
         #resultArea { margin-top:12px; padding:12px; background:#f0f8f0; border-radius:8px; font-size:18px; font-weight:bold; color:#2e7d32; display:none; word-wrap:break-word; }
-        #copyBtn { margin-top:8px; padding:6px 16px; font-size:14px; border:none; background-color:#2196F3; color:white; border-radius:6px; cursor:pointer; display:none; }
+        .action-btn { margin-top:8px; padding:6px 16px; font-size:14px; border:none; border-radius:6px; cursor:pointer; display:none; }
+        #fillBtn { background-color:#FF9800; color:white; margin-right:8px; }
+        #copyBtn { background-color:#2196F3; color:white; }
     </style>
     <div>
         <button id="voiceBtn" onclick="toggleVoice()">🎤 开始录音</button>
@@ -115,7 +115,10 @@ def voice_component():
             <span id="timer">00:00</span>
         </div>
         <div id="resultArea"></div>
-        <button id="copyBtn" onclick="copyResult()">📋 复制结果</button>
+        <div>
+            <button id="fillBtn" class="action-btn" onclick="fillToTextarea()">📋 复制文字进入下面的英文文字框</button>
+            <button id="copyBtn" class="action-btn" onclick="copyResult()">📋 复制到剪贴板</button>
+        </div>
     </div>
     <script>
     var rec = null, isRecording = false, timerInterval = null, seconds = 0, lastTranscript = '';
@@ -145,9 +148,10 @@ def voice_component():
         rec.onresult = function(event) {
             lastTranscript = event.results[0][0].transcript;
             status.innerText = '✅ 识别成功';
-            var resultArea = document.getElementById('resultArea');
-            resultArea.innerText = '🔊 ' + lastTranscript;
-            resultArea.style.display = 'block';
+            document.getElementById('resultArea').innerText = '🔊 ' + lastTranscript;
+            document.getElementById('resultArea').style.display = 'block';
+            // 显示两个按钮
+            document.getElementById('fillBtn').style.display = 'inline-block';
             document.getElementById('copyBtn').style.display = 'inline-block';
             clearInterval(timerInterval);
             seconds = 0; timerSpan.innerText = '00:00';
@@ -183,32 +187,46 @@ def voice_component():
         }, 1000);
     }
 
-    function copyResult() {
+    // 专用填充到父页面文本框的函数
+    function fillToTextarea() {
         if (!lastTranscript) return;
         try {
             var parentDoc = window.parent.document;
             var textareas = parentDoc.querySelectorAll('textarea');
             if (textareas.length > 0) {
                 var ta = textareas[textareas.length - 1];
+                // 使用原生 setter 确保值被修改并触发事件
                 var nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
                 nativeInputValueSetter.call(ta, lastTranscript);
                 ta.dispatchEvent(new Event('input', { bubbles:true }));
                 ta.dispatchEvent(new Event('change', { bubbles:true }));
-                document.getElementById('copyBtn').innerText = '✅ 已填入文本框';
-                setTimeout(function(){ document.getElementById('copyBtn').innerText = '📋 复制结果'; }, 2000);
+                var fillBtn = document.getElementById('fillBtn');
+                fillBtn.innerText = '✅ 已填入文本框';
+                setTimeout(function(){ fillBtn.innerText = '📋 复制文字进入下面的英文文字框'; }, 2000);
                 return;
             }
         } catch(e) {}
+        // 降级：复制到剪贴板然后提示
         navigator.clipboard.writeText(lastTranscript).then(function() {
-            document.getElementById('copyBtn').innerText = '✅ 已复制';
-            setTimeout(function(){ document.getElementById('copyBtn').innerText = '📋 复制结果'; }, 2000);
+            alert('未能自动填入，已复制到剪贴板，请手动粘贴。');
+        }).catch(function() {
+            prompt('请手动复制以下内容后关闭：', lastTranscript);
+        });
+    }
+
+    function copyResult() {
+        if (!lastTranscript) return;
+        navigator.clipboard.writeText(lastTranscript).then(function() {
+            var copyBtn = document.getElementById('copyBtn');
+            copyBtn.innerText = '✅ 已复制';
+            setTimeout(function(){ copyBtn.innerText = '📋 复制到剪贴板'; }, 2000);
         }).catch(function() {
             prompt('请手动复制以下内容后关闭：', lastTranscript);
         });
     }
     </script>
     """
-    components.html(html, height=200)
+    components.html(html, height=260)
 
 # ===== 朗读按钮（通用） =====
 def tts_component(text, lang='zh-CN', label='🔊 朗读', key_suffix=''):
@@ -273,13 +291,7 @@ if st.session_state.step == 1:
 elif st.session_state.step == 2:
     st.subheader('第二步：录制英语语音')
 
-    # 修改1：显示中文意图（只读样式）
-    chinese_display = st.text_area('你的中文意图（供参考）', height=80,
-                                   value=st.session_state.chinese,
-                                   key='chinese_display',
-                                   disabled=True)
-    # 在中文意图右边加朗读按钮（放在同一行？使用列布局）
-    # 由于 text_area 占满宽度，朗读按钮只能放在下方。我们使用两个列：左边显示中文，右边显示按钮
+    # 显示中文意图（只读）
     col_cn, col_btn = st.columns([4, 1])
     with col_cn:
         st.markdown(f'**你的中文意图：** {st.session_state.chinese}')
@@ -287,7 +299,7 @@ elif st.session_state.step == 2:
         tts_component(st.session_state.chinese, lang='zh-CN', label='🔊 朗读中文', key_suffix='chinese')
 
     st.markdown('---')
-    st.markdown('点击下方大按钮录音，识别结果会显示在下方，点击「📋 复制结果」按钮后粘贴到文本框中。')
+    st.markdown('点击下方大按钮录音，识别结果会显示在下方，点击「复制文字进入下面的英文文字框」按钮即可自动填入。')
 
     voice_component()
 
