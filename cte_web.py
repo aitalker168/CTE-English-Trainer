@@ -95,7 +95,7 @@ SUMMARY_SYSTEM = (
     "请将以上所有信息整合成一份阅读体验良好的总结报告，直接输出，不要额外说明。"
 )
 
-# ===== 语音组件（超级醒目大按钮 + 跨iframe填充文本框） =====
+# ===== 语音组件（超级醒目大按钮 + 自动提交） =====
 def voice_component():
     html = """
     <div style="margin-bottom:10px;">
@@ -115,17 +115,22 @@ def voice_component():
     var timerInterval = null;
     var seconds = 0;
 
-    // 获取父页面（Streamlit 主窗口）中最后一个 textarea
-    function getTargetTextarea() {
+    // 直接在当前页面（iframe自身）寻找textarea（因为Streamlit的components.html默认沙箱不允许访问父页面）
+    // 但文本区实际上在父页面，所以我们无法直接获取。解决方法：通过Streamlit的key标识，使用window.parent访问（但仍受沙箱限制）
+    // 替代方案：识别成功后，自动点击父页面中的"提交语音结果"按钮。
+    // 提交按钮的文本包含"提交语音结果"，我们通过遍历所有按钮找到它。
+    function autoSubmit() {
         try {
-            if (window.parent && window.parent.document) {
-                var tas = window.parent.document.querySelectorAll('textarea');
-                if (tas.length > 0) return tas[tas.length - 1];
+            var btns = window.parent.document.querySelectorAll('button');
+            for (var i = 0; i < btns.length; i++) {
+                if (btns[i].innerText && btns[i].innerText.trim() === '✔ 提交语音结果') {
+                    btns[i].click();
+                    break;
+                }
             }
-        } catch(e) {}
-        var tas = document.querySelectorAll('textarea');
-        if (tas.length > 0) return tas[tas.length - 1];
-        return null;
+        } catch(e) {
+            // 如果无法访问父页面，则手动尝试通过iframe内部窗口
+        }
     }
 
     function toggleVoice() {
@@ -157,11 +162,25 @@ def voice_component():
         rec.onresult = function(event) {
             var transcript = event.results[0][0].transcript;
             status.innerText = '✅ 识别成功';
-            var ta = getTargetTextarea();
-            if (ta) {
-                ta.value = transcript;
-                ta.dispatchEvent(new Event('input', { bubbles: true }));
+
+            // 尝试填充父页面的文本框（如果沙箱允许）
+            try {
+                var parentTextareas = window.parent.document.querySelectorAll('textarea');
+                if (parentTextareas.length > 0) {
+                    var ta = parentTextareas[parentTextareas.length - 1];
+                    ta.value = transcript;
+                    // 触发多种事件以通知Streamlit
+                    ['input', 'change', 'blur'].forEach(evt => {
+                        ta.dispatchEvent(new Event(evt, { bubbles: true }));
+                    });
+                }
+            } catch(e) {
+                // 如果不能访问父页面，则通过自动点击提交按钮来触发Python端读取
             }
+
+            // 无论如何，自动点击提交按钮（延迟一下让文本框更新）
+            setTimeout(autoSubmit, 300);
+
             clearInterval(timerInterval);
             seconds = 0;
             timerSpan.innerText = '00:00';
@@ -208,7 +227,6 @@ def voice_component():
     }
     </script>
     """
-    # 关键修正：移除 sandbox 参数，采用默认沙盒策略
     components.html(html, height=120)
 
 # ===== 朗读按钮组件 =====
@@ -272,18 +290,19 @@ if st.session_state.step == 1:
         else:
             st.error("请输入中文意图")
 
-# ===== 步骤 2：语音输入 =====
+# ===== 步骤 2：语音输入（自动提交） =====
 elif st.session_state.step == 2:
     st.subheader("第二步：录制英语语音")
-    st.markdown("语音识别结果将**自动填入**下面的文本框，你可以直接修改或输入。")
+    st.markdown("点击录音按钮，识别成功后**自动提交**或手动点击下方按钮。")
 
-    # 先显示文本框，再显示录音按钮（保证点击时文本框已存在）
-    voice_text = st.text_area("英文内容（可手动输入或修改）", height=120,
+    # 先显示文本框（即使JS无法填充，也不影响用户手动输入）
+    voice_text = st.text_area("英文内容（识别结果将自动填入）", height=120,
                                value=st.session_state.voice_text,
                                key="voice_input",
-                               placeholder="识别结果或手动输入的英文将显示在此")
-    voice_component()  # 录音按钮
+                               placeholder="录音识别结果将自动填入，你也可以直接打字")
+    voice_component()  # 录音按钮（内含自动提交逻辑）
 
+    # 这个按钮本身留着备用，但自动提交会触发相同的逻辑
     col1, col2 = st.columns(2)
     with col1:
         if st.button("✔ 提交语音结果", type="primary", use_container_width=True):
