@@ -47,7 +47,8 @@ CORRECTION_SYSTEM = (
 POLISH_SYSTEM = (
     "你是一个英语口语教练。用户提供了一个中文意图和一段初步修正的英文。\n"
     "请按以下要求严格输出：\n\n"
-    "第一步：将修正后的英文润色为地道、自然的口语版英语。注意：**不要使用过于高端或生僻的词汇，保持与用户原句难度相近，适当提高但不超过日常口语常用水平**。只输出润色后的句子，不要任何额外文字。\n\n"
+    "第一步：将修正后的英文润色为地道、自然的口语版英语。注意：**不要使用过于高端或生僻的词汇，"
+    "保持与用户原句难度相近，适当提高但不超过日常口语常用水平**。只输出润色后的句子，不要任何额外文字。\n\n"
     "第二步：在润色句子之后，立即换行，然后输出以下分隔符：\n"
     "===EXPLANATION===\n"
     "然后换行，再按照以下三个序列号输出详细的解释：\n"
@@ -87,7 +88,7 @@ SUMMARY_SYSTEM = (
     "1. 学习目标（用户想表达的中文意思）\n"
     "2. 原始语音识别文本（用户说的英文，未经修正）\n"
     "3. AI修正后的英文（修正拼写/语法后的句子）\n"
-    "4. 高水平口语润色结果（最终润色句子）\n"
+    "4. 口语润色结果（最终润色句子）\n"
     "5. 重要词汇与用法解析（从解释中提取关键形容词、副词、动词及其作用）\n"
     "6. 句子结构分析（主句、从句、连接词等）\n"
     "7. 错题重点回顾（列出练习题中用户可能易错的题目类型与知识点）\n"
@@ -95,7 +96,7 @@ SUMMARY_SYSTEM = (
     "请将以上所有信息整合成一份阅读体验良好的总结报告，直接输出，不要额外说明。"
 )
 
-# ===== 语音识别组件（大按钮 + 结果显示 + 复制按钮） =====
+# ===== 语音识别组件（浏览器录音 + 复制/自动填入） =====
 def voice_component():
     html = """
     <style>
@@ -186,35 +187,39 @@ def voice_component():
         }, 1000);
     }
 
-    // 填充到父页面文本框（通过 placeholder 精确定位）
+    // 填充到父页面文本框并自动提交
     function fillToTextarea() {
         if (!lastTranscript) return;
         try {
             var parentDoc = window.parent.document;
-            // 先尝试通过 placeholder 查找英文输入框
-            var ta = parentDoc.querySelector('textarea[placeholder*="识别结果会自动填入"]');
+            var ta = parentDoc.querySelector('textarea[placeholder*="识别结果"]');
             if (!ta) {
-                // 降级：取最后一个 textarea
-                var tas = parentDoc.querySelectorAll('textarea');
-                if (tas.length > 0) ta = tas[tas.length - 1];
+                var allTextareas = parentDoc.querySelectorAll('textarea');
+                if (allTextareas.length > 0) ta = allTextareas[allTextareas.length - 1];
             }
             if (ta) {
-                // 使用父页面的 HTMLTextAreaElement.prototype.setter
                 var setter = Object.getOwnPropertyDescriptor(parentDoc.defaultView.HTMLTextAreaElement.prototype, 'value').set;
                 setter.call(ta, lastTranscript);
-                // 触发多事件确保 Streamlit 捕获
-                ['input', 'change', 'blur', 'keyup'].forEach(evtName => {
-                    ta.dispatchEvent(new Event(evtName, { bubbles: true }));
+                ['input', 'change', 'blur'].forEach(evt => {
+                    ta.dispatchEvent(new Event(evt, { bubbles: true }));
                 });
                 var fillBtn = document.getElementById('fillBtn');
-                fillBtn.innerText = '✅ 已填入文本框';
+                fillBtn.innerText = '✅ 已填入';
                 setTimeout(function(){ fillBtn.innerText = '📋 复制文字进入下面的英文文字框'; }, 2000);
+                // 自动点击"提交语音结果"按钮
+                setTimeout(function() {
+                    var allBtns = parentDoc.querySelectorAll('button');
+                    for (var i = 0; i < allBtns.length; i++) {
+                        var btnText = allBtns[i].innerText ? allBtns[i].innerText.trim() : '';
+                        if (btnText.indexOf('提交语音结果') !== -1) {
+                            allBtns[i].click();
+                            break;
+                        }
+                    }
+                }, 800);
                 return;
             }
-        } catch(e) {
-            console.error('fillToTextarea error:', e);
-        }
-        // 降级方案：复制到剪贴板并提示
+        } catch(e) {}
         navigator.clipboard.writeText(lastTranscript).then(function() {
             alert('未能自动填入，已复制到剪贴板，请手动粘贴。');
         }).catch(function() {
@@ -234,13 +239,12 @@ def voice_component():
     }
     </script>
     """
-    # 不捕获返回值，完全依靠 DOM 操作
     components.html(html, height=260)
 
 # ===== 朗读按钮（通用） =====
 def tts_component(text, lang='zh-CN', label='🔊 朗读', key_suffix=''):
     safe = text.replace("'", "\\'").replace("\n", " ").strip()
-    unique_id = f"ttsBtn_{key_suffix or abs(hash(text))}"
+    unique_id = 'tts_' + (key_suffix or str(abs(hash(text))))
     html = f"""
     <button id="{unique_id}" onclick="speakNow_{unique_id}()" style="padding:6px 14px; font-size:14px; border:none; border-radius:6px; background-color:#2196F3; color:white; cursor:pointer;">{label}</button>
     <script>
@@ -301,22 +305,35 @@ elif st.session_state.step == 2:
     st.subheader('第二步：录制英语语音')
 
     # 显示中文意图 + 朗读按钮
-    col_cn, col_btn = st.columns([4, 1])
+    col_cn, col_tts = st.columns([4, 1])
     with col_cn:
         st.markdown(f'**你的中文意图：** {st.session_state.chinese}')
-    with col_btn:
+    with col_tts:
         tts_component(st.session_state.chinese, lang='zh-CN', label='🔊 朗读中文', key_suffix='chinese')
 
     st.markdown('---')
-    st.markdown('点击下方大按钮录音，识别后点击「复制文字进入下面的英文文字框」按钮，文字会自动填入下方的文本框。')
+    st.markdown('点击下方大按钮录音，识别后点击「复制文字进入下面的英文文字框」即可自动填充并提交。')
 
+    # 语音组件
     voice_component()
 
     st.markdown('---')
-    # ★ 关键：使用稳定的 placeholder 供 JS 定位
-    voice_text = st.text_area('英文内容（识别结果将自动填入）', height=120,
-                               key='voice_input',
-                               placeholder='识别结果会自动填入，你也可以直接打字')
+    # 新增：Whisper 网页端入口
+    st.markdown('#### 或使用 Whisper 网页端（高精度）')
+    st.markdown('[🌐 打开 Whisper 网页](https://huggingface.co/spaces/hf-audio/whisper-large-v3)')
+    whisper_paste = st.text_area('从 Whisper 网页复制识别结果后粘贴到这里', height=60,
+                                 key='whisper_paste')
+    if st.button('📋 粘贴到英文框', use_container_width=True):
+        if whisper_paste.strip():
+            st.session_state.voice_input = whisper_paste.strip()
+            st.rerun()
+        else:
+            st.error('粘贴框为空，请先复制结果')
+
+    st.markdown('---')
+    st.text_area('英文内容（识别结果将自动填入）', height=120,
+                 key='voice_input',
+                 placeholder='识别结果会自动填入，你也可以直接打字')
 
     col1, col2 = st.columns(2)
     with col1:
